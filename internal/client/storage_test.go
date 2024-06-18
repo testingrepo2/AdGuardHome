@@ -294,7 +294,7 @@ func TestStorage_FindLoose(t *testing.T) {
 		}
 	)
 
-	ci := newStorage(
+	s := newStorage(
 		t,
 		[]*client.Persistent{
 			clientNoZone,
@@ -326,7 +326,7 @@ func TestStorage_FindLoose(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, ok := ci.FindLoose(tc.ip.WithZone(""), nonExistingClientID)
+			c, ok := s.FindLoose(tc.ip.WithZone(""), nonExistingClientID)
 			assert.Equal(t, tc.wantCli, c)
 			tc.want(t, ok)
 		})
@@ -413,6 +413,57 @@ func TestStorage_Update(t *testing.T) {
 
 			err := s.Update(clientName, tc.cli)
 			testutil.AssertErrorMsg(t, tc.wantErrMsg, err)
+		})
+	}
+}
+
+func TestStorage_RangeByName(t *testing.T) {
+	sortedClients := []*client.Persistent{{
+		Name:      "clientA",
+		ClientIDs: []string{"A"},
+	}, {
+		Name:      "clientB",
+		ClientIDs: []string{"B"},
+	}, {
+		Name:      "clientC",
+		ClientIDs: []string{"C"},
+	}, {
+		Name:      "clientD",
+		ClientIDs: []string{"D"},
+	}, {
+		Name:      "clientE",
+		ClientIDs: []string{"E"},
+	}}
+
+	testCases := []struct {
+		name string
+		want []*client.Persistent
+	}{{
+		name: "basic",
+		want: sortedClients,
+	}, {
+		name: "nil",
+		want: nil,
+	}, {
+		name: "one_element",
+		want: sortedClients[:1],
+	}, {
+		name: "two_elements",
+		want: sortedClients[:2],
+	}}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStorage(t, tc.want)
+
+			var got []*client.Persistent
+			s.RangeByName(func(c *client.Persistent) (cont bool) {
+				got = append(got, c)
+
+				return true
+			})
+
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

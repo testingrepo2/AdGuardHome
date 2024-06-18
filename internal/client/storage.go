@@ -55,12 +55,17 @@ func (s *Storage) Add(p *Persistent) (err error) {
 }
 
 // Find finds persistent client by string representation of the client ID, IP
-// address, or MAC.
+// address, or MAC.  And returns it shallow copy.
 func (s *Storage) Find(id string) (p *Persistent, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.index.Find(id)
+	p, ok = s.index.Find(id)
+	if ok {
+		return p.ShallowClone(), ok
+	}
+
+	return nil, false
 }
 
 // FindLoose is like [Storage.Find] but it also tries to find a persistent
@@ -76,12 +81,12 @@ func (s *Storage) FindLoose(ip netip.Addr, id string) (p *Persistent, ok bool) {
 
 	p, ok = s.index.Find(id)
 	if ok {
-		return p, ok
+		return p.ShallowClone(), ok
 	}
 
 	p = s.index.FindByIPWithoutZone(ip)
 	if p != nil {
-		return p, true
+		return p.ShallowClone(), true
 	}
 
 	return nil, false
@@ -131,6 +136,23 @@ func (s *Storage) Update(name string, n *Persistent) (err error) {
 	s.index.Add(n)
 
 	return nil
+}
+
+// RangeByName calls f for each persistent client sorted by name, unless cont is
+// false.
+func (s *Storage) RangeByName(f func(c *Persistent) (cont bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.index.RangeByName(f)
+}
+
+// CloseUpstreams closes upstream configurations of persistent clients.
+func (s *Storage) CloseUpstreams() (err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.index.CloseUpstreams()
 }
 
 // ClientRuntime returns the saved runtime client by ip.  If no such client
