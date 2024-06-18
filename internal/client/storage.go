@@ -1,23 +1,14 @@
 package client
 
 import (
-	"fmt"
 	"net/netip"
-	"slices"
 	"sync"
 
-	"github.com/AdguardTeam/dnsproxy/proxy"
-	"github.com/AdguardTeam/dnsproxy/upstream"
-	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/errors"
-	"github.com/AdguardTeam/golibs/log"
 )
 
 // Storage contains information about persistent and runtime clients.
 type Storage struct {
-	// allTags is a set of all client tags.
-	allTags *container.MapSet[string]
-
 	// mu protects index of persistent clients.
 	mu *sync.Mutex
 
@@ -29,11 +20,8 @@ type Storage struct {
 }
 
 // NewStorage returns initialized client storage.
-func NewStorage(clientTags []string) (s *Storage) {
-	allTags := container.NewMapSet(clientTags...)
-
+func NewStorage() (s *Storage) {
 	return &Storage{
-		allTags:      allTags,
 		mu:           &sync.Mutex{},
 		index:        NewIndex(),
 		runtimeIndex: map[netip.Addr]*Runtime{},
@@ -41,35 +29,12 @@ func NewStorage(clientTags []string) (s *Storage) {
 }
 
 // Add stores persistent client information or returns an error.  p must be
-// valid persistent client.
+// valid persistent client.  See [Persistent.Validate].
 func (s *Storage) Add(p *Persistent) (err error) {
+	defer func() { err = errors.Annotate(err, "adding client: %w") }()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	err = s.check(p)
-	if err != nil {
-		return fmt.Errorf("adding client: %w", err)
-	}
-
-	s.index.Add(p)
-
-	return nil
-}
-
-// check returns an error if persistent client information contains errors.
-//
-// TODO(s.chzhen):  Remove persistent client information validation.
-func (s *Storage) check(p *Persistent) (err error) {
-	switch {
-	case p == nil:
-		return errors.Error("client is nil")
-	case p.Name == "":
-		return errors.Error("empty name")
-	case p.IDsLen() == 0:
-		return errors.Error("id required")
-	case p.UID == UID{}:
-		return errors.Error("uid required")
-	}
 
 	err = s.index.ClashesUID(p)
 	if err != nil {
@@ -77,24 +42,13 @@ func (s *Storage) check(p *Persistent) (err error) {
 		return err
 	}
 
-	conf, err := proxy.ParseUpstreamsConfig(p.Upstreams, &upstream.Options{})
+	err = s.index.Clashes(p)
 	if err != nil {
-		return fmt.Errorf("invalid upstream servers: %w", err)
+		// Don't wrap the error since there is already an annotation deferred.
+		return err
 	}
 
-	err = conf.Close()
-	if err != nil {
-		log.Error("client: closing upstream config: %s", err)
-	}
-
-	for _, t := range p.Tags {
-		if !s.allTags.Has(t) {
-			return fmt.Errorf("invalid tag: %q", t)
-		}
-	}
-
-	// TODO(s.chzhen):  Move to the constructor.
-	slices.Sort(p.Tags)
+	s.index.Add(p)
 
 	return nil
 }
@@ -117,7 +71,6 @@ func (s *Storage) RemoveByName(name string) (ok bool) {
 func (s *Storage) Update(p, n *Persistent) (err error) {
 	defer func() { err = errors.Annotate(err, "updating client: %w") }()
 
-	err = s.check(n)
 	if err != nil {
 		// Don't wrap the error since there is already an annotation deferred.
 		return err
