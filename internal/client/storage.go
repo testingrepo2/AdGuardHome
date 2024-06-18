@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	"net/netip"
 	"sync"
 
@@ -53,9 +54,45 @@ func (s *Storage) Add(p *Persistent) (err error) {
 	return nil
 }
 
+// Find finds persistent client by string representation of the client ID, IP
+// address, or MAC.
+func (s *Storage) Find(id string) (p *Persistent, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.index.Find(id)
+}
+
+// FindLoose is like [Storage.Find] but it also tries to find a persistent
+// client by IP address without zone.  It strips the IPv6 zone index from the
+// stored IP addresses before comparing, because querylog entries don't have it.
+// See TODO on [querylog.logEntry.IP].
+//
+// Note that multiple clients can have the same IP address with different zones.
+// Therefore, the result of this method is indeterminate.
+func (s *Storage) FindLoose(ip netip.Addr, id string) (p *Persistent, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	p, ok = s.index.Find(id)
+	if ok {
+		return p, ok
+	}
+
+	p = s.index.FindByIPWithoutZone(ip)
+	if p != nil {
+		return p, true
+	}
+
+	return nil, false
+}
+
 // RemoveByName removes persistent client information.  ok is false if no such
 // client exists by that name.
 func (s *Storage) RemoveByName(name string) (ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	p, ok := s.index.FindByName(name)
 	if !ok {
 		return false
@@ -66,15 +103,23 @@ func (s *Storage) RemoveByName(name string) (ok bool) {
 	return true
 }
 
-// Update updates stored persistent client information p with new information n
-// or returns an error.  p and n must have the same UID.
-func (s *Storage) Update(p, n *Persistent) (err error) {
+// Update finds the stored persistent client by its name and updates its
+// information from n.
+func (s *Storage) Update(name string, n *Persistent) (err error) {
 	defer func() { err = errors.Annotate(err, "updating client: %w") }()
 
-	if err != nil {
-		// Don't wrap the error since there is already an annotation deferred.
-		return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, ok := s.index.FindByName(name)
+	if !ok {
+		return fmt.Errorf("client %q is not found", name)
 	}
+
+	// Client n has a newly generated UID, so replace it with the stored one.
+	//
+	// TODO(s.chzhen):  Remove when frontend starts handling UIDs.
+	n.UID = stored.UID
 
 	err = s.index.Clashes(n)
 	if err != nil {
@@ -82,7 +127,7 @@ func (s *Storage) Update(p, n *Persistent) (err error) {
 		return err
 	}
 
-	s.index.Delete(p)
+	s.index.Delete(stored)
 	s.index.Add(n)
 
 	return nil
