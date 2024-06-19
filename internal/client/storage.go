@@ -2,10 +2,12 @@ package client
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 	"sync"
 
 	"github.com/AdguardTeam/golibs/errors"
+	"github.com/AdguardTeam/golibs/log"
 )
 
 // Storage contains information about persistent and runtime clients.
@@ -15,17 +17,13 @@ type Storage struct {
 
 	// index contains information about persistent clients.
 	index *Index
-
-	// runtimeIndex contains information about runtime clients.
-	runtimeIndex map[netip.Addr]*Runtime
 }
 
 // NewStorage returns initialized client storage.
 func NewStorage() (s *Storage) {
 	return &Storage{
-		mu:           &sync.Mutex{},
-		index:        NewIndex(),
-		runtimeIndex: map[netip.Addr]*Runtime{},
+		mu:    &sync.Mutex{},
+		index: NewIndex(),
 	}
 }
 
@@ -51,7 +49,17 @@ func (s *Storage) Add(p *Persistent) (err error) {
 
 	s.index.Add(p)
 
+	log.Debug("client storage: added %q: IDs: %q [%d]", p.Name, p.IDs(), s.index.Size())
+
 	return nil
+}
+
+// FindByName finds persistent client by name.
+func (s *Storage) FindByName(name string) (c *Persistent, found bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.index.FindByName(name)
 }
 
 // Find finds persistent client by string representation of the client ID, IP
@@ -92,6 +100,14 @@ func (s *Storage) FindLoose(ip netip.Addr, id string) (p *Persistent, ok bool) {
 	return nil, false
 }
 
+// FindByMAC finds persistent client by MAC.
+func (s *Storage) FindByMAC(mac net.HardwareAddr) (c *Persistent, found bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.index.FindByMAC(mac)
+}
+
 // RemoveByName removes persistent client information.  ok is false if no such
 // client exists by that name.
 func (s *Storage) RemoveByName(name string) (ok bool) {
@@ -103,13 +119,18 @@ func (s *Storage) RemoveByName(name string) (ok bool) {
 		return false
 	}
 
+	if err := p.CloseUpstreams(); err != nil {
+		log.Error("client storage: removing client %q: %s", p.Name, err)
+	}
+
 	s.index.Delete(p)
 
 	return true
 }
 
 // Update finds the stored persistent client by its name and updates its
-// information from n.
+// information from n.  n must be valid persistent client.  See
+// [Persistent.Validate].
 func (s *Storage) Update(name string, n *Persistent) (err error) {
 	defer func() { err = errors.Annotate(err, "updating client: %w") }()
 
@@ -147,57 +168,18 @@ func (s *Storage) RangeByName(f func(c *Persistent) (cont bool)) {
 	s.index.RangeByName(f)
 }
 
+// Size returns the number of persistent clients.
+func (s *Storage) Size() (n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.index.Size()
+}
+
 // CloseUpstreams closes upstream configurations of persistent clients.
 func (s *Storage) CloseUpstreams() (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	return s.index.CloseUpstreams()
-}
-
-// ClientRuntime returns the saved runtime client by ip.  If no such client
-// exists, returns nil.
-func (s *Storage) ClientRuntime(ip netip.Addr) (rc *Runtime) {
-	return s.runtimeIndex[ip]
-}
-
-// AddRuntime saves the runtime client information in the storage.  IP address
-// of a client must be unique.  rc must not be nil.
-func (s *Storage) AddRuntime(rc *Runtime) {
-	ip := rc.Addr()
-	s.runtimeIndex[ip] = rc
-}
-
-// SizeRuntime returns the number of the runtime clients.
-func (s *Storage) SizeRuntime() (n int) {
-	return len(s.runtimeIndex)
-}
-
-// RangeRuntime calls f for each runtime client in an undefined order.
-func (s *Storage) RangeRuntime(f func(rc *Runtime) (cont bool)) {
-	for _, rc := range s.runtimeIndex {
-		if !f(rc) {
-			return
-		}
-	}
-}
-
-// DeleteRuntime removes the runtime client by ip.
-func (s *Storage) DeleteRuntime(ip netip.Addr) {
-	delete(s.runtimeIndex, ip)
-}
-
-// DeleteBySource removes all runtime clients that have information only from
-// the specified source and returns the number of removed clients.
-func (s *Storage) DeleteBySource(src Source) (n int) {
-	for ip, rc := range s.runtimeIndex {
-		rc.unset(src)
-
-		if rc.isEmpty() {
-			delete(s.runtimeIndex, ip)
-			n++
-		}
-	}
-
-	return n
 }

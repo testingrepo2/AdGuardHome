@@ -366,7 +366,6 @@ func TestStorage_Update(t *testing.T) {
 		cli: &client.Persistent{
 			Name: "basic",
 			IPs:  []netip.Addr{netip.MustParseAddr("1.1.1.1")},
-			UID:  client.MustNewUID(),
 		},
 		wantErrMsg: "",
 	}, {

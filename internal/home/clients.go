@@ -44,8 +44,8 @@ type DHCP interface {
 
 // clientsContainer is the storage of all runtime and persistent clients.
 type clientsContainer struct {
-	// clientIndex stores information about persistent clients.
-	clientIndex *client.Index
+	// storage stores information about persistent clients.
+	storage *client.Storage
 
 	// runtimeIndex stores information about runtime clients.
 	runtimeIndex *client.RuntimeIndex
@@ -103,13 +103,13 @@ func (clients *clientsContainer) Init(
 	filteringConf *filtering.Config,
 ) (err error) {
 	// TODO(s.chzhen):  Refactor it.
-	if clients.clientIndex != nil {
+	if clients.storage != nil {
 		return errors.Error("clients container already initialized")
 	}
 
 	clients.runtimeIndex = client.NewRuntimeIndex()
 
-	clients.clientIndex = client.NewIndex()
+	clients.storage = client.NewStorage()
 
 	clients.allTags = container.NewMapSet(clientTags...)
 
@@ -285,17 +285,14 @@ func (clients *clientsContainer) addFromConfig(
 			return fmt.Errorf("clients: init persistent client at index %d: %w", i, err)
 		}
 
-		// TODO(s.chzhen):  Consider moving to the client index constructor.
-		err = clients.clientIndex.ClashesUID(cli)
+		err = cli.Validate(clients.allTags)
 		if err != nil {
-			return fmt.Errorf("adding client %s at index %d: %w", cli.Name, i, err)
+			return fmt.Errorf("validating client %s at index %d: %w", cli.Name, i, err)
 		}
 
-		err = clients.add(cli)
+		err = clients.storage.Add(cli)
 		if err != nil {
-			// TODO(s.chzhen):  Return an error instead of logging if more
-			// stringent requirements are implemented.
-			log.Error("clients: adding client %s at index %d: %s", cli.Name, i, err)
+			return fmt.Errorf("adding client %s at index %d: %w", cli.Name, i, err)
 		}
 	}
 
@@ -308,8 +305,8 @@ func (clients *clientsContainer) forConfig() (objs []*clientObject) {
 	clients.lock.Lock()
 	defer clients.lock.Unlock()
 
-	objs = make([]*clientObject, 0, clients.clientIndex.Size())
-	clients.clientIndex.RangeByName(func(cli *client.Persistent) (cont bool) {
+	objs = []*clientObject{}
+	clients.storage.RangeByName(func(cli *client.Persistent) (cont bool) {
 		objs = append(objs, &clientObject{
 			Name: cli.Name,
 
@@ -336,7 +333,7 @@ func (clients *clientsContainer) forConfig() (objs []*clientObject) {
 		return true
 	})
 
-	return objs
+	return slices.Clip(objs)
 }
 
 // arpClientsUpdatePeriod defines how often ARP clients are updated.
@@ -412,12 +409,8 @@ func (clients *clientsContainer) clientOrArtificial(
 		}
 	}()
 
-	cli, ok := clients.find(id)
-	if !ok {
-		cli = clients.clientIndex.FindByIPWithoutZone(ip)
-	}
-
-	if cli != nil {
+	cli, ok := clients.storage.FindLoose(ip, id)
+	if ok {
 		return &querylog.Client{
 			Name:           cli.Name,
 			IgnoreQueryLog: cli.IgnoreQueryLog,
@@ -523,7 +516,7 @@ func (clients *clientsContainer) UpstreamConfigByID(
 // findLocked searches for a client by its ID.  clients.lock is expected to be
 // locked.
 func (clients *clientsContainer) findLocked(id string) (c *client.Persistent, ok bool) {
-	c, ok = clients.clientIndex.Find(id)
+	c, ok = clients.storage.Find(id)
 	if ok {
 		return c, true
 	}
@@ -545,7 +538,7 @@ func (clients *clientsContainer) findDHCP(ip netip.Addr) (c *client.Persistent, 
 		return nil, false
 	}
 
-	return clients.clientIndex.FindByMAC(foundMAC)
+	return clients.storage.FindByMAC(foundMAC)
 }
 
 // runtimeClient returns a runtime client from internal index.  Note that it
@@ -577,114 +570,6 @@ func (clients *clientsContainer) findRuntimeClient(ip netip.Addr) (rc *client.Ru
 	}
 
 	return rc
-}
-
-// check validates the client.  It also sorts the client tags.
-func (clients *clientsContainer) check(c *client.Persistent) (err error) {
-	switch {
-	case c == nil:
-		return errors.Error("client is nil")
-	case c.Name == "":
-		return errors.Error("invalid name")
-	case c.IDsLen() == 0:
-		return errors.Error("id required")
-	default:
-		// Go on.
-	}
-
-	for _, t := range c.Tags {
-		if !clients.allTags.Has(t) {
-			return fmt.Errorf("invalid tag: %q", t)
-		}
-	}
-
-	// TODO(s.chzhen):  Move to the constructor.
-	slices.Sort(c.Tags)
-
-	_, err = proxy.ParseUpstreamsConfig(c.Upstreams, &upstream.Options{})
-	if err != nil {
-		return fmt.Errorf("invalid upstream servers: %w", err)
-	}
-
-	return nil
-}
-
-// add adds a persistent client or returns an error.
-func (clients *clientsContainer) add(c *client.Persistent) (err error) {
-	err = clients.check(c)
-	if err != nil {
-		// Don't wrap the error since it's informative enough as is.
-		return err
-	}
-
-	clients.lock.Lock()
-	defer clients.lock.Unlock()
-
-	err = clients.clientIndex.Clashes(c)
-	if err != nil {
-		// Don't wrap the error since it's informative enough as is.
-		return err
-	}
-
-	clients.addLocked(c)
-
-	log.Debug("clients: added %q: ID:%q [%d]", c.Name, c.IDs(), clients.clientIndex.Size())
-
-	return nil
-}
-
-// addLocked c to the indexes.  clients.lock is expected to be locked.
-func (clients *clientsContainer) addLocked(c *client.Persistent) {
-	clients.clientIndex.Add(c)
-}
-
-// remove removes a client.  ok is false if there is no such client.
-func (clients *clientsContainer) remove(name string) (ok bool) {
-	clients.lock.Lock()
-	defer clients.lock.Unlock()
-
-	c, ok := clients.clientIndex.FindByName(name)
-	if !ok {
-		return false
-	}
-
-	clients.removeLocked(c)
-
-	return true
-}
-
-// removeLocked removes c from the indexes.  clients.lock is expected to be
-// locked.
-func (clients *clientsContainer) removeLocked(c *client.Persistent) {
-	if err := c.CloseUpstreams(); err != nil {
-		log.Error("client container: removing client %s: %s", c.Name, err)
-	}
-
-	// Update the ID index.
-	clients.clientIndex.Delete(c)
-}
-
-// update updates a client by its name.
-func (clients *clientsContainer) update(prev, c *client.Persistent) (err error) {
-	err = clients.check(c)
-	if err != nil {
-		// Don't wrap the error since it's informative enough as is.
-		return err
-	}
-
-	clients.lock.Lock()
-	defer clients.lock.Unlock()
-
-	err = clients.clientIndex.Clashes(c)
-	if err != nil {
-		// Don't wrap the error since it's informative enough as is.
-		return err
-	}
-
-	clients.removeLocked(prev)
-	clients.addLocked(c)
-
-	return nil
 }
 
 // setWHOISInfo sets the WHOIS information for a client.  clients.lock is
@@ -848,5 +733,5 @@ func (clients *clientsContainer) addFromSystemARP() {
 // close gracefully closes all the client-specific upstream configurations of
 // the persistent clients.
 func (clients *clientsContainer) close() (err error) {
-	return clients.clientIndex.CloseUpstreams()
+	return clients.storage.CloseUpstreams()
 }
