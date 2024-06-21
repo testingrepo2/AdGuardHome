@@ -70,6 +70,7 @@ type Persistent struct {
 	// BlockedServices is the configuration of blocked services of a client.
 	BlockedServices *filtering.BlockedServices
 
+	// Name of the persistent client.  Must not be empty.
 	Name string
 
 	Tags      []string
@@ -99,8 +100,8 @@ type Persistent struct {
 	SafeSearchConf filtering.SafeSearchConfig
 }
 
-// Validate returns an error if persistent client information contains errors.
-func (c *Persistent) Validate(allTags *container.MapSet[string]) (err error) {
+// validate returns an error if persistent client information contains errors.
+func (c *Persistent) validate(allTags *container.MapSet[string]) (err error) {
 	switch {
 	case c.Name == "":
 		return errors.Error("empty name")

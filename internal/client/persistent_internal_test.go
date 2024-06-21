@@ -166,7 +166,7 @@ func TestPersistent_Validate(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.cli.Validate(nil)
+			err := tc.cli.validate(nil)
 			testutil.AssertErrorMsg(t, tc.wantErrMsg, err)
 		})
 	}

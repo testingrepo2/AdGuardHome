@@ -6,31 +6,45 @@ import (
 	"net/netip"
 	"sync"
 
+	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/log"
 )
 
 // Storage contains information about persistent and runtime clients.
 type Storage struct {
-	// mu protects index of persistent clients.
+	// allowedTags is a set of all allowed tags.
+	allowedTags *container.MapSet[string]
+
+	// mu protects indexes of persistent and runtime clients.
 	mu *sync.Mutex
 
 	// index contains information about persistent clients.
 	index *Index
+
+	// runtimeIndex contains information about runtime clients.
+	runtimeIndex *RuntimeIndex
 }
 
 // NewStorage returns initialized client storage.
-func NewStorage() (s *Storage) {
+func NewStorage(allowedTags *container.MapSet[string]) (s *Storage) {
 	return &Storage{
-		mu:    &sync.Mutex{},
-		index: NewIndex(),
+		allowedTags:  allowedTags,
+		mu:           &sync.Mutex{},
+		index:        NewIndex(),
+		runtimeIndex: NewRuntimeIndex(),
 	}
 }
 
-// Add stores persistent client information or returns an error.  p must be
-// valid persistent client.  See [Persistent.Validate].
+// Add stores persistent client information or returns an error.
 func (s *Storage) Add(p *Persistent) (err error) {
 	defer func() { err = errors.Annotate(err, "adding client: %w") }()
+
+	err = p.validate(s.allowedTags)
+	if err != nil {
+		// Don't wrap the error since there is already an annotation deferred.
+		return err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,10 +143,15 @@ func (s *Storage) RemoveByName(name string) (ok bool) {
 }
 
 // Update finds the stored persistent client by its name and updates its
-// information from n.  n must be valid persistent client.  See
-// [Persistent.Validate].
-func (s *Storage) Update(name string, n *Persistent) (err error) {
+// information from p.
+func (s *Storage) Update(name string, p *Persistent) (err error) {
 	defer func() { err = errors.Annotate(err, "updating client: %w") }()
+
+	err = p.validate(s.allowedTags)
+	if err != nil {
+		// Don't wrap the error since there is already an annotation deferred.
+		return err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -142,19 +161,19 @@ func (s *Storage) Update(name string, n *Persistent) (err error) {
 		return fmt.Errorf("client %q is not found", name)
 	}
 
-	// Client n has a newly generated UID, so replace it with the stored one.
+	// Client p has a newly generated UID, so replace it with the stored one.
 	//
 	// TODO(s.chzhen):  Remove when frontend starts handling UIDs.
-	n.UID = stored.UID
+	p.UID = stored.UID
 
-	err = s.index.Clashes(n)
+	err = s.index.Clashes(p)
 	if err != nil {
 		// Don't wrap the error since there is already an annotation deferred.
 		return err
 	}
 
 	s.index.Delete(stored)
-	s.index.Add(n)
+	s.index.Add(p)
 
 	return nil
 }
@@ -182,4 +201,55 @@ func (s *Storage) CloseUpstreams() (err error) {
 	defer s.mu.Unlock()
 
 	return s.index.CloseUpstreams()
+}
+
+// ClientRuntime returns a copy of the saved runtime client by ip.  If no such
+// client exists, returns nil.
+func (s *Storage) ClientRuntime(ip netip.Addr) (rc *Runtime) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.runtimeIndex.Client(ip)
+}
+
+// AddRuntime saves the runtime client information in the storage.  IP address
+// of a client must be unique.  rc must not be nil.
+func (s *Storage) AddRuntime(rc *Runtime) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.runtimeIndex.Add(rc)
+}
+
+// SizeRuntime returns the number of the runtime clients.
+func (s *Storage) SizeRuntime() (n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.runtimeIndex.Size()
+}
+
+// RangeRuntime calls f for each runtime client in an undefined order.
+func (s *Storage) RangeRuntime(f func(rc *Runtime) (cont bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.runtimeIndex.Range(f)
+}
+
+// DeleteRuntime removes the runtime client by ip.
+func (s *Storage) DeleteRuntime(ip netip.Addr) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.runtimeIndex.Delete(ip)
+}
+
+// DeleteBySource removes all runtime clients that have information only from
+// the specified source and returns the number of removed clients.
+func (s *Storage) DeleteBySource(src Source) (n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.runtimeIndex.DeleteBySource(src)
 }

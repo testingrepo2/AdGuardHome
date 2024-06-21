@@ -96,7 +96,7 @@ func (clients *clientsContainer) handleGetClients(w http.ResponseWriter, r *http
 	clients.lock.Lock()
 	defer clients.lock.Unlock()
 
-	clients.storage.RangeByName(func(c *client.Persistent) (cont bool) {
+	clients.clientIndex.Range(func(c *client.Persistent) (cont bool) {
 		cj := clientToJSON(c)
 		data.Clients = append(data.Clients, cj)
 
@@ -336,14 +336,7 @@ func (clients *clientsContainer) handleAddClient(w http.ResponseWriter, r *http.
 		return
 	}
 
-	err = c.Validate(clients.allTags)
-	if err != nil {
-		aghhttp.Error(r, w, http.StatusBadRequest, "%s", err)
-
-		return
-	}
-
-	err = clients.storage.Add(c)
+	err = clients.add(c)
 	if err != nil {
 		aghhttp.Error(r, w, http.StatusBadRequest, "%s", err)
 
@@ -371,7 +364,7 @@ func (clients *clientsContainer) handleDelClient(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if !clients.storage.RemoveByName(cj.Name) {
+	if !clients.remove(cj.Name) {
 		aghhttp.Error(r, w, http.StatusBadRequest, "Client not found")
 
 		return
@@ -406,21 +399,30 @@ func (clients *clientsContainer) handleUpdateClient(w http.ResponseWriter, r *ht
 		return
 	}
 
-	c, err := clients.jsonToClient(dj.Data, nil)
+	var prev *client.Persistent
+	var ok bool
+
+	func() {
+		clients.lock.Lock()
+		defer clients.lock.Unlock()
+
+		prev, ok = clients.clientIndex.FindByName(dj.Name)
+	}()
+
+	if !ok {
+		aghhttp.Error(r, w, http.StatusBadRequest, "client not found")
+
+		return
+	}
+
+	c, err := clients.jsonToClient(dj.Data, prev)
 	if err != nil {
 		aghhttp.Error(r, w, http.StatusBadRequest, "%s", err)
 
 		return
 	}
 
-	err = c.Validate(clients.allTags)
-	if err != nil {
-		aghhttp.Error(r, w, http.StatusBadRequest, "%s", err)
-
-		return
-	}
-
-	err = clients.storage.Update(dj.Name, c)
+	err = clients.update(prev, c)
 	if err != nil {
 		aghhttp.Error(r, w, http.StatusBadRequest, "%s", err)
 

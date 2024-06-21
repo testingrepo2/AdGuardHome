@@ -16,7 +16,7 @@ import (
 func newStorage(tb testing.TB, m []*client.Persistent) (s *client.Storage) {
 	tb.Helper()
 
-	s = client.NewStorage()
+	s = client.NewStorage(nil)
 
 	for _, c := range m {
 		c.UID = client.MustNewUID()
@@ -57,7 +57,7 @@ func TestStorage_Add(t *testing.T) {
 		UID:       existingClientUID,
 	}
 
-	s := client.NewStorage()
+	s := client.NewStorage(nil)
 	err := s.Add(existingClient)
 	require.NoError(t, err)
 
@@ -137,7 +137,7 @@ func TestStorage_RemoveByName(t *testing.T) {
 		UID:  client.MustNewUID(),
 	}
 
-	s := client.NewStorage()
+	s := client.NewStorage(nil)
 	err := s.Add(existingClient)
 	require.NoError(t, err)
 
@@ -162,7 +162,7 @@ func TestStorage_RemoveByName(t *testing.T) {
 	}
 
 	t.Run("duplicate_remove", func(t *testing.T) {
-		s = client.NewStorage()
+		s = client.NewStorage(nil)
 		err = s.Add(existingClient)
 		require.NoError(t, err)
 
@@ -366,6 +366,7 @@ func TestStorage_Update(t *testing.T) {
 		cli: &client.Persistent{
 			Name: "basic",
 			IPs:  []netip.Addr{netip.MustParseAddr("1.1.1.1")},
+			UID:  client.MustNewUID(),
 		},
 		wantErrMsg: "",
 	}, {
@@ -373,6 +374,7 @@ func TestStorage_Update(t *testing.T) {
 		cli: &client.Persistent{
 			Name: obstructingName,
 			IPs:  []netip.Addr{netip.MustParseAddr("3.3.3.3")},
+			UID:  client.MustNewUID(),
 		},
 		wantErrMsg: `updating client: another client uses the same name "obstructing_name"`,
 	}, {
@@ -380,6 +382,7 @@ func TestStorage_Update(t *testing.T) {
 		cli: &client.Persistent{
 			Name: "duplicate_ip",
 			IPs:  []netip.Addr{obstructingIP},
+			UID:  client.MustNewUID(),
 		},
 		wantErrMsg: `updating client: another client "obstructing_name" uses the same IP "1.2.3.4"`,
 	}, {
@@ -387,6 +390,7 @@ func TestStorage_Update(t *testing.T) {
 		cli: &client.Persistent{
 			Name:    "duplicate_subnet",
 			Subnets: []netip.Prefix{obstructingSubnet},
+			UID:     client.MustNewUID(),
 		},
 		wantErrMsg: `updating client: another client "obstructing_name" ` +
 			`uses the same subnet "1.2.3.0/24"`,
@@ -395,6 +399,7 @@ func TestStorage_Update(t *testing.T) {
 		cli: &client.Persistent{
 			Name:      "duplicate_client_id",
 			ClientIDs: []string{obstructingClientID},
+			UID:       client.MustNewUID(),
 		},
 		wantErrMsg: `updating client: another client "obstructing_name" ` +
 			`uses the same ClientID "obstructing_client_id"`,
