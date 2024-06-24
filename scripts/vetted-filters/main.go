@@ -72,7 +72,7 @@ func main() {
 		key := f.FilterKey
 		cat := f.category()
 		if cat == "" {
-			l.Warn("no fitting category for filter", "key", key, "idx", i)
+			l.WarnContext(ctx, "no fitting category for filter", "key", key, "idx", i)
 		}
 
 		aghFlt.Filters[key] = &aghFiltersFilter{
