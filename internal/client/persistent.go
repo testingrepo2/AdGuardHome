@@ -67,7 +67,8 @@ type Persistent struct {
 
 	SafeSearch filtering.SafeSearch
 
-	// BlockedServices is the configuration of blocked services of a client.
+	// BlockedServices is the configuration of blocked services of a client.  It
+	// must not be nil after initialization.
 	BlockedServices *filtering.BlockedServices
 
 	// Name of the persistent client.  Must not be empty.
