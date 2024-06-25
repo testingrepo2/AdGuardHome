@@ -7,7 +7,7 @@
 </p>
 <h3 align="center">Privacy protection center for you and your devices</h3>
 <p align="center">
-  Free and open source, powerful network-wide ads & trackers blocking DNS server.
+  Free and open source, powerful network-wide ads & trackers blocking DNS server. 
 </p>
 <p align="center">
   <a href="https://adguard.com/">AdGuard.com</a> |
